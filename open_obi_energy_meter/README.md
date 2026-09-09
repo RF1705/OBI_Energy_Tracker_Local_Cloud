@@ -98,6 +98,7 @@ bind + ECDH). Everything was reverse-engineered from firmware `1.2.1`; details i
 | 10 | **On-board e-paper** | Heltec Vision Master E290 2.9″ display shows live gateway + reader status (auto-detected via the board flag; other boards unaffected) |
 | 11 | **Auto-update from GitHub** | pulls the newest release on a schedule (hours or days) — **off by default**, points at this repo or your own fork |
 | 12 | **Large on-device history** | daily summaries always in the small 128 KB partition; on the stock C3 gateway, raw samples use up to **~1.6 MB** of otherwise-unused OTA-partition space, and still survive a firmware update via a small guaranteed reserve |
+| 13 | **EcoFlow STREAM grid meter** | emulates an **everHome EcoTracker IR** (mDNS `_everhome._tcp` + `GET /v1/json`), so an EcoFlow STREAM Ultra / Ultra X / AC Pro adopts a reader **directly and fully locally** as its grid meter — no cloud, no extra device; off by default ([details](#ecoflow-stream)) |
 
 ## Hardware & wiring
 
@@ -304,6 +305,42 @@ JSON above; each discovery entity just points a `value_template` at one of its f
 - Import/export are reported as raw **Wh** (`total_increasing`), matching the meter's native unit — divide by
   1000 in HA if you prefer kWh. Null/`n/a` readings are guarded, so a missing value never pushes a bogus `0`.
 
+## EcoFlow STREAM as a consumer — EcoTracker emulation <a id="ecoflow-stream"></a>
+
+An EcoFlow **STREAM (Ultra / Ultra X / AC Pro)** needs a grid meter at the house connection point to run its
+zero-export / self-consumption control loop. If your OBI reader already sits on that meter, the gateway can
+**be** that grid meter for the STREAM — with no other hardware and no cloud on either side:
+
+- Settings → **EcoFlow STREAM (EcoTracker emulation)** → enable, pick the reader (or leave it on *automatic*).
+- In the EcoFlow app: STREAM → add an **external power meter** → type **"ECOTRACKER IR"**. Phone, gateway and
+  STREAM must share one network/broadcast domain during pairing (mDNS). The app does **not** ask for an IP —
+  discovery is mDNS-only, which is exactly what the emulation advertises.
+- After adoption the STREAM itself polls `GET /v1/json` on the gateway about once a second, straight from its
+  own ESP32 — the readings never leave your LAN.
+
+Why EcoTracker and not the officially advertised Shelly 3EM? EcoFlow reads a Shelly through **Shelly's cloud**
+(a proprietary, encrypted uplink that cannot be emulated) — a virtual Shelly gets discovered, added, and then
+sits at "connection pending" forever. The EcoTracker path is **local by design**: recent EcoFlow firmware pairs
+it exclusively over mDNS. The emulation follows everHome's published Local API (`power` in W, positive =
+importing; `energyCounter*` in Wh, monotonic — the exact units the reader already reports, so nothing is
+converted or guessed).
+
+Notes:
+
+- `GET /v1/json` is served **without login** even when the dashboard has a password — the STREAM's
+  microcontroller can't authenticate. It exposes only that one reader's W/Wh readings, and answers 404 while
+  the feature is disabled (which is the default).
+- A reader reports on an interval (minutes), the STREAM polls every second — that's fine: the payload's
+  `agePower` field carries the reading's age. Once a reading is older than the configurable staleness limit
+  (default 300 s) the gateway answers **503** instead of a stale value, so the STREAM never regulates against
+  fiction. For a snappier loop, lower the reader's upload interval and give the reader USB power (its optical
+  readout must be active — short-press the reader button so `infrared` is 1).
+- The app's meter status dot is an "in active use" flag, not a reachability check — judge success by the
+  **"being polled"** status line in the settings card, not by the app.
+- The emulated identity (serial + MAC under everHome's `B4:3A:45` OUI) is generated once and persisted, so the
+  pairing survives reboots and firmware updates. The published energy counters are kept monotonic even across
+  a reader switch, because a consumer that sees its meter run backwards may reject it.
+
 ## Reader firmware OTA over LoRa
 
 Pick a reader's `.bin`, press **Flash firmware**, confirm the warning. The gateway advertises the new
@@ -472,6 +509,7 @@ Bind + ECDH). Alles wurde aus Firmware `1.2.1` reversed; Details in
 | 10 | **On-Board-E-Ink** | Heltec Vision Master E290 2,9″-Display zeigt Live-Status von Gateway + Readern (über das Board-Flag automatisch; andere Boards unberührt) |
 | 11 | **Auto-Update von GitHub** | zieht das neueste Release nach Zeitplan (Stunden oder Tage) — **standardmäßig aus**, zeigt auf dieses Repo oder einen eigenen Fork |
 | 12 | **Große On-Device-History** | Tageswerte liegen immer in der kleinen 128-KB-Partition; auf dem Stock-C3-Gateway nutzen Rohdaten bis zu **~1,6 MB** sonst ungenutzten OTA-Partitionsspeicher und überstehen trotzdem ein Firmware-Update über eine kleine garantierte Reserve |
+| 13 | **EcoFlow-STREAM-Netzanschlusszähler** | emuliert einen **everHome EcoTracker IR** (mDNS `_everhome._tcp` + `GET /v1/json`), sodass ein EcoFlow STREAM Ultra / Ultra X / AC Pro einen Reader **direkt und komplett lokal** als Netzanschluss-Messgerät übernimmt — ohne Cloud, ohne Zusatzgerät; standardmäßig aus ([Details](#ecoflow-stream-de)) |
 
 ## Hardware & Verdrahtung
 
@@ -687,6 +725,44 @@ bleibt die eine JSON oben; jede Discovery-Entity zeigt nur mit einem `value_temp
 - Bezug/Einspeisung werden als rohe **Wh** gemeldet (`total_increasing`), passend zur nativen Einheit des
   Zählers — bei Bedarf in HA durch 1000 teilen für kWh. Null-/„n/a"-Werte sind abgesichert, damit ein
   fehlender Wert nie eine falsche `0` pusht.
+
+## EcoFlow STREAM als Abnehmer — EcoTracker-Emulation <a id="ecoflow-stream-de"></a>
+
+Ein EcoFlow **STREAM (Ultra / Ultra X / AC Pro)** braucht für seine Nulleinspeisungs-/Eigenverbrauchs-Regelung
+ein Messgerät am Netzanschlusspunkt. Sitzt dein OBI-Reader ohnehin auf diesem Zähler, kann das Gateway dieses
+Messgerät für den STREAM **sein** — ohne weitere Hardware und ohne Cloud auf beiden Seiten:
+
+- Einstellungen → **EcoFlow STREAM (EcoTracker-Emulation)** → aktivieren, Reader wählen (oder auf *Automatisch*
+  lassen).
+- In der EcoFlow-App: STREAM → **externes Strommessgerät** hinzufügen → Typ **„ECOTRACKER IR"**. Handy, Gateway
+  und STREAM müssen beim Koppeln im selben Netz/Broadcast-Bereich sein (mDNS). Die App fragt **keine** IP ab —
+  die Erkennung läuft ausschließlich über mDNS, und genau das kündigt die Emulation an.
+- Nach der Übernahme fragt der STREAM selbst etwa sekündlich `GET /v1/json` am Gateway ab, direkt von seinem
+  eigenen ESP32 — die Messwerte verlassen das LAN nie.
+
+Warum EcoTracker und nicht die offiziell beworbene Shelly 3EM? EcoFlow liest eine Shelly über die
+**Shelly-Cloud** (proprietärer, verschlüsselter Uplink, nicht emulierbar) — eine virtuelle Shelly wird zwar
+gefunden und hinzugefügt, hängt dann aber für immer bei „Verbindung ausstehend". Der EcoTracker-Pfad ist
+**bewusst lokal**: aktuelle EcoFlow-Firmware koppelt ihn ausschließlich über mDNS. Die Emulation folgt
+everHomes veröffentlichter Local API (`power` in W, positiv = Bezug; `energyCounter*` in Wh, monoton — exakt
+die Einheiten, die der Reader ohnehin liefert, es wird also nichts umgerechnet oder geraten).
+
+Hinweise:
+
+- `GET /v1/json` wird auch bei gesetztem Dashboard-Passwort **ohne Login** ausgeliefert — der Mikrocontroller
+  des STREAM kann sich nicht anmelden. Sichtbar sind nur die W/Wh-Werte des einen Readers; solange die
+  Funktion aus ist (Standard), antwortet der Pfad mit 404.
+- Ein Reader meldet im Minuten-Intervall, der STREAM fragt sekündlich — das passt: das Feld `agePower` im
+  Payload trägt das Alter des Messwerts. Ist ein Wert älter als die einstellbare Grenze (Standard 300 s),
+  antwortet das Gateway mit **503** statt mit einem veralteten Wert, damit der STREAM nie gegen Fiktion
+  regelt. Für eine flottere Regelung das Upload-Intervall des Readers senken und den Reader per USB versorgen
+  (die optische Ablesung muss aktiv sein — Reader-Taste kurz drücken, sodass `infrared` auf 1 steht).
+- Der Messgerät-Status-Punkt in der App ist ein „wird aktiv genutzt"-Indikator, keine Erreichbarkeits-Prüfung —
+  Erfolg an der Statuszeile **„wird abgefragt"** in der Einstellungs-Karte ablesen, nicht an der App.
+- Die emulierte Identität (Seriennummer + MAC unter everHomes OUI `B4:3A:45`) wird einmal erzeugt und
+  persistiert, die Kopplung übersteht also Neustarts und Firmware-Updates. Die publizierten Zählerstände
+  bleiben auch über einen Reader-Wechsel hinweg monoton, weil ein Abnehmer einen rückwärts laufenden Zähler
+  ablehnen kann.
 
 ## Reader-Firmware-OTA über LoRa
 
