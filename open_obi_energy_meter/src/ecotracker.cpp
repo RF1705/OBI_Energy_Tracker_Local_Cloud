@@ -31,7 +31,16 @@ static bool     g_ecoOn = false;          // master switch — OFF by default; n
 static uint8_t  g_ecoHandle[3] = {0};     // reader to publish; 00 00 00 = "auto: first assigned reader with data"
 static uint8_t  g_ecoSrc = 0;             // 0 = auto (reported W, fall back to calculated), 1 = reported, 2 = calculated
 static uint16_t g_ecoStale = 300;         // serve 503 once the reading is older than this many seconds (0 = never)
+// Which powerPhaseN field carries the reading (0/1/2 = L1/L2/L3). A single-phase reader knows nothing about
+// phases, so this is purely how the STREAM sees it; it regulates on the total `power` either way.
+static uint8_t  g_ecoPhase = 0;
 static char     g_ecoSerial[13] = "";     // 12 hex chars, stable across reboots (the app pairs against it)
+// Optional client allowlist for the unauthenticated /v1/json: comma-separated IPv4 addresses and/or CIDR
+// prefixes ("192.168.1.50, 10.0.0.0/8"). Empty = anyone on the LAN (the default -- the endpoint only leaks
+// one meter's W/Wh, and the STREAM's address is usually DHCP-assigned, so a mandatory list would just break
+// installs). Non-matching clients get 403; the STREAM itself is never denied a 404/503 it would otherwise get.
+static char     g_ecoAllow[128] = "";
+static uint32_t g_denied = 0;             // /v1/json requests refused by the allowlist (surfaced in the UI)
 
 // Counter continuity across a reader switch. A grid meter's totals may never go backwards -- a consumer
 // that sees them drop can reject the meter outright or corrupt its own energy statistics. Switching the
@@ -80,7 +89,9 @@ void eco_init(WebServer *srv) {
   g_ecoOn    = ecoPrefs.getBool("on", false);
   g_ecoSrc   = ecoPrefs.getUChar("src", 0);
   g_ecoStale = ecoPrefs.getUShort("stale", 300);
+  g_ecoPhase = ecoPrefs.getUChar("phase", 0); if (g_ecoPhase > 2) g_ecoPhase = 0;
   { String s = ecoPrefs.getString("serial", ""); s.toCharArray(g_ecoSerial, sizeof g_ecoSerial); }
+  { String s = ecoPrefs.getString("allow", "");  s.toCharArray(g_ecoAllow,  sizeof g_ecoAllow);  }
   { size_t n = ecoPrefs.getBytes("rdr", g_ecoHandle, 3); if (n != 3) memset(g_ecoHandle, 0, 3); }
   g_offIn  = ecoPrefs.getLong64("offin", 0);  g_offOut  = ecoPrefs.getLong64("offout", 0);
   g_lastIn = ecoPrefs.getUInt("lastin", 0);   g_lastOut = ecoPrefs.getUInt("lastout", 0);
@@ -119,9 +130,44 @@ static uint32_t ecoPower(const Reader &r) {
   return obi_na(r.power) ? r.calcPower : r.power;
 }
 
+// ---------------------------------------------------------------------------- allowlist
+// One entry: "a.b.c.d" or "a.b.c.d/n". Returns false for anything unparseable, so a typo denies rather than
+// silently opens up -- and the settings handler rejects such lists up front so a typo can't be saved.
+static bool parseAllowEntry(const char *e, size_t len, uint32_t &net, uint32_t &mask) {
+  char b[24]; if (len == 0 || len >= sizeof b) return false;
+  memcpy(b, e, len); b[len] = 0;
+  int bits = 32; char *slash = strchr(b, '/');
+  if (slash) { *slash = 0; char *end; long v = strtol(slash + 1, &end, 10); if (*end || v < 0 || v > 32) return false; bits = (int)v; }
+  IPAddress ip; if (!ip.fromString(b)) return false;
+  net  = (uint32_t)ip;                               // Arduino IPAddress -> uint32 is in NETWORK byte order ...
+  mask = bits == 0 ? 0 : htonl(0xFFFFFFFFu << (32 - bits));   // ... so build the mask the same way
+  net &= mask;
+  return true;
+}
+// Walks the list. validateOnly: just check the syntax (client ignored). Empty list = everyone allowed.
+static bool allowlistCheck(const char *list, IPAddress client, bool validateOnly) {
+  const char *p = list; bool anyEntry = false;
+  while (*p) {
+    while (*p == ' ' || *p == ',' || *p == ';') p++;
+    if (!*p) break;
+    const char *e = p; while (*p && *p != ',' && *p != ';' && *p != ' ') p++;
+    uint32_t net, mask;
+    if (!parseAllowEntry(e, p - e, net, mask)) return false;
+    anyEntry = true;
+    if (!validateOnly && (((uint32_t)client & mask) == net)) return true;
+  }
+  return validateOnly ? true : !anyEntry;
+}
+
 // ---------------------------------------------------------------------------- GET /v1/json
 void eco_handle_v1json() {
   if (!g_ecoOn) { g_srv->send(404, "application/json", "{\"error\":\"ecotracker emulation disabled\"}"); return; }
+  if (g_ecoAllow[0] && !allowlistCheck(g_ecoAllow, g_srv->client().remoteIP(), false)) {
+    g_denied++;
+    Serial.printf("[eco] /v1/json refused for %s (not in allowlist)\n", g_srv->client().remoteIP().toString().c_str());
+    g_srv->send(403, "application/json", "{\"error\":\"client not allowed\"}");
+    return;
+  }
   Reader *rp = ecoReader();
   if (!rp || !rp->haveData || obi_na(rp->import_)) {
     g_srv->send(503, "application/json", "{\"error\":\"no reader data\"}");
@@ -161,13 +207,15 @@ void eco_handle_v1json() {
   // second averaging path here; fall back to the instantaneous value when it is not.
   long pavg = obi_na(r.calcPower) ? p : (long)(int32_t)r.calcPower;
 
+  long ph[3] = {0, 0, 0}; ph[g_ecoPhase] = p;
+
   char buf[320];
   snprintf(buf, sizeof buf,
            "{\"power\":%ld,\"powerAvg\":%ld,\"agePower\":%lu,"
-           "\"powerPhase1\":%ld,\"powerPhase2\":0,\"powerPhase3\":0,"
+           "\"powerPhase1\":%ld,\"powerPhase2\":%ld,\"powerPhase3\":%ld,"
            "\"energyCounterIn\":%lld,\"energyCounterInT1\":%lld,\"energyCounterInT2\":0,"
            "\"energyCounterOut\":%lld}",
-           p, pavg, (unsigned long)age, p, (long long)in, (long long)in, (long long)out);
+           p, pavg, (unsigned long)age, ph[0], ph[1], ph[2], (long long)in, (long long)in, (long long)out);
   g_lastPollMs = millis(); g_pollCount++;
   g_srv->send(200, "application/json", buf);
 }
@@ -218,11 +266,21 @@ void eco_handle_cfg() {
   }
   if (g_srv->hasArg("src")) { int s = g_srv->arg("src").toInt(); if (s >= 0 && s <= 2) g_ecoSrc = (uint8_t)s; }
   if (g_srv->hasArg("stale")) { long s = g_srv->arg("stale").toInt(); if (s >= 0 && s <= 65535) g_ecoStale = (uint16_t)s; }
+  if (g_srv->hasArg("phase")) { int s = g_srv->arg("phase").toInt(); if (s >= 0 && s <= 2) g_ecoPhase = (uint8_t)s; }
+  if (g_srv->hasArg("allow")) {
+    String a = g_srv->arg("allow"); a.trim();
+    if (a.length() >= sizeof g_ecoAllow || !allowlistCheck(a.c_str(), IPAddress(), true)) {
+      g_srv->send(400, "application/json", "{\"ok\":false,\"err\":\"allow\"}"); return;
+    }
+    a.toCharArray(g_ecoAllow, sizeof g_ecoAllow);
+  }
   ecoPrefs.begin("obieco", false);
   ecoPrefs.putBool("on", g_ecoOn);
   ecoPrefs.putBytes("rdr", g_ecoHandle, 3);
   ecoPrefs.putUChar("src", g_ecoSrc);
   ecoPrefs.putUShort("stale", g_ecoStale);
+  ecoPrefs.putUChar("phase", g_ecoPhase);
+  ecoPrefs.putString("allow", g_ecoAllow);
   ecoPrefs.putLong64("offin", g_offIn); ecoPrefs.putLong64("offout", g_offOut);
   ecoPrefs.putUInt("lastin", g_lastIn); ecoPrefs.putUInt("lastout", g_lastOut);
   ecoPrefs.end();
@@ -241,6 +299,9 @@ String eco_status_json() {
   j += ",\"active_reader\":" + (r ? jstr(handleHex(r->handle).c_str()) : String("null"));
   j += ",\"src\":" + String(g_ecoSrc);
   j += ",\"stale_s\":" + String(g_ecoStale);
+  j += ",\"phase\":" + String(g_ecoPhase);
+  j += ",\"allow\":" + jstr(g_ecoAllow);
+  j += ",\"denied\":" + String(g_denied);
   j += ",\"host\":" + jstr(ecoHostname());
   j += ",\"mac\":" + jstr(ecoMac());
   j += ",\"serial\":" + jstr(g_ecoSerial);

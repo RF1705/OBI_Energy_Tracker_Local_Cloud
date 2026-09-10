@@ -329,7 +329,11 @@ Notes:
 
 - `GET /v1/json` is served **without login** even when the dashboard has a password — the STREAM's
   microcontroller can't authenticate. It exposes only that one reader's W/Wh readings, and answers 404 while
-  the feature is disabled (which is the default).
+  the feature is disabled (which is the default). If you want to narrow it anyway, the settings card takes an
+  optional **client allowlist** — comma-separated IPv4 addresses and/or CIDR ranges (e.g. the STREAM's IP);
+  everyone else gets **403**. Give the STREAM a fixed address in your router first, or a DHCP change locks it out.
+- The payload's `powerPhase1..3` fields are what the STREAM shows per phase; the settings card lets you put the
+  reading on L1 (default), L2 or L3. The total `power` it regulates on is unchanged either way.
 - A reader reports on an interval (minutes), the STREAM polls every second — that's fine: the payload's
   `agePower` field carries the reading's age. Once a reading is older than the configurable staleness limit
   (default 300 s) the gateway answers **503** instead of a stale value, so the STREAM never regulates against
@@ -751,7 +755,13 @@ Hinweise:
 
 - `GET /v1/json` wird auch bei gesetztem Dashboard-Passwort **ohne Login** ausgeliefert — der Mikrocontroller
   des STREAM kann sich nicht anmelden. Sichtbar sind nur die W/Wh-Werte des einen Readers; solange die
-  Funktion aus ist (Standard), antwortet der Pfad mit 404.
+  Funktion aus ist (Standard), antwortet der Pfad mit 404. Wer den Zugriff trotzdem einschränken will, kann in
+  der Einstellungs-Karte eine optionale **Client-Allowlist** hinterlegen — IPv4-Adressen und/oder CIDR-Bereiche,
+  kommagetrennt (z. B. die IP des STREAM); alle anderen erhalten **403**. Dem STREAM vorher im Router eine feste
+  Adresse geben, sonst sperrt ihn ein DHCP-Wechsel aus.
+- Die Felder `powerPhase1..3` im Payload sind das, was der STREAM pro Phase anzeigt; in der Einstellungs-Karte
+  lässt sich der Messwert auf L1 (Standard), L2 oder L3 legen. Die Gesamtleistung `power`, auf die er regelt,
+  bleibt davon unberührt.
 - Ein Reader meldet im Minuten-Intervall, der STREAM fragt sekündlich — das passt: das Feld `agePower` im
   Payload trägt das Alter des Messwerts. Ist ein Wert älter als die einstellbare Grenze (Standard 300 s),
   antwortet das Gateway mit **503** statt mit einem veralteten Wert, damit der STREAM nie gegen Fiktion
