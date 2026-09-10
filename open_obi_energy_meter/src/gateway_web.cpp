@@ -1992,8 +1992,12 @@ button:disabled{opacity:.5;cursor:default}
    <div><label id=lecordr>Reader</label><select id=ecordr><option value=auto id=oecoauto>Automatisch</option></select></div>
    <div><label id=lecosrc>Leistungswert</label><select id=ecosrc>
     <option value=0 id=oecosrc0>Automatisch</option><option value=1 id=oecosrc1>Nur gemessen</option><option value=2 id=oecosrc2>Nur berechnet</option></select></div>
+   <div><label id=lecoph>Phase</label><select id=ecoph>
+    <option value=0>L1</option><option value=1>L2</option><option value=2>L3</option></select></div>
   </div>
   <label id=lecostale>Fehler melden, wenn Messwert älter als (Sekunden, 0 = nie)</label><input id=ecostale type=number min=0 max=65535 placeholder=300>
+  <label id=lecoallow>Erlaubte Clients für /v1/json (leer = alle)</label><input id=ecoallow maxlength=127 placeholder="192.168.1.50, 10.0.0.0/8">
+  <div class=msg id=ecoallowhint style="margin:2px 0 8px"></div>
   <div class=msg id=ecoid style="margin-top:10px"></div>
   <div class=row><button onclick=saveEco()><span id=beco>Speichern</span></button><span class=msg id=ecomsg></span></div>
  </div>
@@ -2126,7 +2130,10 @@ $('lecosrc').textContent=t('Leistungswert','Power value');
 $('oecosrc0').textContent=t('Automatisch (gemessen, sonst berechnet)','Automatic (reported, else calculated)');
 $('oecosrc1').textContent=t('Nur gemessen','Reported only');
 $('oecosrc2').textContent=t('Nur berechnet (aus Zählerständen)','Calculated only (from the Wh counters)');
+$('lecoph').textContent=t('Phase (powerPhase1–3 im Payload)','Phase (powerPhase1–3 in the payload)');
 $('lecostale').textContent=t('Fehler melden, wenn Messwert älter als (Sekunden, 0 = nie)','Report an error once the reading is older than (seconds, 0 = never)');
+$('lecoallow').textContent=t('Erlaubte Clients für /v1/json (leer = alle im Netz)','Allowed clients for /v1/json (empty = anyone on the LAN)');
+$('ecoallowhint').textContent=t('Optional: IPv4-Adressen und/oder CIDR-Bereiche, kommagetrennt — z. B. die IP des STREAM. Andere Anfragen erhalten 403. Vorsicht bei DHCP: wechselt die IP des STREAM, wird er ausgesperrt — am besten eine feste Adresse im Router vergeben.','Optional: IPv4 addresses and/or CIDR ranges, comma-separated — e.g. the STREAM\'s IP. Other clients get 403. Mind DHCP: if the STREAM\'s IP changes it gets locked out — best give it a fixed address in the router.');
 $('beco').textContent=t('Speichern','Save');
 $('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
 $('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
@@ -2190,14 +2197,14 @@ async function load(){try{
     :f.busy?`<span class="dot on"></span>${t('Upload läuft…','uploading…')}`
     :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}${esc(errTxt)}`+(f.enabled&&f.use_interval?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'')+esc(schedTxt);}
   if(s.ecotracker){const ec=s.ecotracker;
-   if(!ecoc){ecoc=true;$('ecoon').checked=!!ec.enabled;$('ecosrc').value=ec.src||0;$('ecostale').value=ec.stale_s??300;
+   if(!ecoc){ecoc=true;$('ecoon').checked=!!ec.enabled;$('ecosrc').value=ec.src||0;$('ecostale').value=ec.stale_s??300;$('ecoallow').value=ec.allow||'';$('ecoph').value=ec.phase||0;
     ecoSel=(ec.reader&&ec.reader!=='000000')?ec.reader:'auto';const o=$('ecordr');if(o.dataset.filled){o.value=ecoSel;if(!o.value)o.value='auto';}}
    const lp=ec.last_poll_s;
    $('ecostat').innerHTML=!ec.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
     :!ec.advertised?`<span class="dot off"></span>${t('aktiv, aber nicht angekündigt (kein WLAN?)','enabled, but not advertised (no WiFi?)')}`
     :(lp>=0&&lp<60)?`<span class="dot on"></span>${t('wird abgefragt — letzte Abfrage vor '+lp+' s','being polled — last request '+lp+' s ago')}${ec.active_reader?' · Reader <code>'+ec.active_reader+'</code>':''}`
     :`<span class="dot on"></span>${t('angekündigt — noch keine Abfrage vom EcoFlow','advertised — no poll from the EcoFlow yet')}`;
-   $('ecoid').innerHTML=ec.enabled?`mDNS <code>${ec.host}</code> · ${t('Seriennr.','serial')} <code>${ec.serial}</code> · <code>http://${s.ip}/v1/json</code>`:'';}
+   $('ecoid').innerHTML=ec.enabled?`mDNS <code>${ec.host}</code> · ${t('Seriennr.','serial')} <code>${ec.serial}</code> · <code>http://${s.ip}/v1/json</code>`+(ec.allow?` · ${t('Allowlist aktiv','allowlist active')}${ec.denied?` (${ec.denied} ${t('abgewiesen','denied')})`:''}`:''):'';}
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -2209,8 +2216,9 @@ async function loadEcoReaders(){try{const rs=await(await fetch('/api/readers')).
  o.dataset.filled=1;o.value=ecoSel;if(!o.value)o.value='auto';}catch(e){}}
 async function saveEco(){const m=$('ecomsg');m.textContent='…';
  const b=new URLSearchParams();b.set('on',$('ecoon').checked?'1':'0');b.set('reader',$('ecordr').value||'auto');
- b.set('src',$('ecosrc').value);b.set('stale',$('ecostale').value===''?300:$('ecostale').value);
+ b.set('src',$('ecosrc').value);b.set('stale',$('ecostale').value===''?300:$('ecostale').value);b.set('allow',$('ecoallow').value.trim());b.set('phase',$('ecoph').value);
  try{const r=await(await fetch('/api/ecotracker',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();
+  if(r.err==='allow'){m.textContent=t('Allowlist ungültig — nur IPv4-Adressen / CIDR, kommagetrennt','invalid allowlist — IPv4 addresses / CIDR only, comma-separated');return;}
   if(typeof r.enabled==='undefined')throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ecoc=false;load();}
  catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveGwName(){const m=$('gwnmsg');m.textContent='…';
