@@ -1999,7 +1999,8 @@ button:disabled{opacity:.5;cursor:default}
   <label id=lecoallow>Erlaubte Clients für /v1/json (leer = alle)</label><input id=ecoallow maxlength=127 placeholder="192.168.1.50, 10.0.0.0/8">
   <div class=msg id=ecoallowhint style="margin:2px 0 8px"></div>
   <div class=msg id=ecoid style="margin-top:10px"></div>
-  <div class=row><button onclick=saveEco()><span id=beco>Speichern</span></button><span class=msg id=ecomsg></span></div>
+  <div class=row><button onclick=saveEco()><span id=beco>Speichern</span></button><button onclick=ecoPair()><span id=becopair>Kopplungsmodus</span></button><span class=msg id=ecomsg></span></div>
+  <div class=msg id=ecopairhint style="margin-top:6px"></div>
  </div>
 
  <div class=card>
@@ -2135,6 +2136,7 @@ $('lecostale').textContent=t('Fehler melden, wenn Messwert älter als (Sekunden,
 $('lecoallow').textContent=t('Erlaubte Clients für /v1/json (leer = alle im Netz)','Allowed clients for /v1/json (empty = anyone on the LAN)');
 $('ecoallowhint').textContent=t('Optional: IPv4-Adressen und/oder CIDR-Bereiche, kommagetrennt — z. B. die IP des STREAM. Andere Anfragen erhalten 403. Vorsicht bei DHCP: wechselt die IP des STREAM, wird er ausgesperrt — am besten eine feste Adresse im Router vergeben.','Optional: IPv4 addresses and/or CIDR ranges, comma-separated — e.g. the STREAM\'s IP. Other clients get 403. Mind DHCP: if the STREAM\'s IP changes it gets locked out — best give it a fixed address in the router.');
 $('beco').textContent=t('Speichern','Save');
+$('becopair').textContent=t('Kopplungsmodus (15 min)','Pairing mode (15 min)');
 $('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
 $('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
 $('lftppath').textContent=t('Zielordner (leer = Login-Verzeichnis)','Target folder (blank = login directory)');
@@ -2151,7 +2153,7 @@ $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
 $('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
 $('blorasave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto';
+let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto',ecoPairing=false;
 function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -2204,7 +2206,13 @@ async function load(){try{
     :!ec.advertised?`<span class="dot off"></span>${t('aktiv, aber nicht angekündigt (kein WLAN?)','enabled, but not advertised (no WiFi?)')}`
     :(lp>=0&&lp<60)?`<span class="dot on"></span>${t('wird abgefragt — letzte Abfrage vor '+lp+' s','being polled — last request '+lp+' s ago')}${ec.active_reader?' · Reader <code>'+ec.active_reader+'</code>':''}`
     :`<span class="dot on"></span>${t('angekündigt — noch keine Abfrage vom EcoFlow','advertised — no poll from the EcoFlow yet')}`;
-   $('ecoid').innerHTML=ec.enabled?`mDNS <code>${ec.host}</code> · ${t('Seriennr.','serial')} <code>${ec.serial}</code> · <code>http://${s.ip}/v1/json</code>`+(ec.allow?` · ${t('Allowlist aktiv','allowlist active')}${ec.denied?` (${ec.denied} ${t('abgewiesen','denied')})`:''}`:''):'';}
+   $('ecoid').innerHTML=ec.enabled?`mDNS <code>${ec.host}</code> · ${t('Seriennr.','serial')} <code>${ec.serial}</code> · <code>http://${s.ip}/v1/json</code>`+(ec.allow?` · ${t('Allowlist aktiv','allowlist active')}${ec.denied?` (${ec.denied} ${t('abgewiesen','denied')})`:''}`:''):'';
+   ecoPairing=!!ec.pairing;
+   $('becopair').textContent=ecoPairing?t('Kopplungsmodus beenden','Stop pairing mode'):t('Kopplungsmodus (15 min)','Pairing mode (15 min)');
+   $('ecopairhint').textContent=ecoPairing
+    ?t('Kopplungsmodus aktiv — /v1/json antwortet mit 0 statt mit Fehlern, solange kein echter Messwert vorliegt (noch '+Math.max(1,Math.ceil((ec.pairing_left_s||0)/60))+' min, endet automatisch). Jetzt in der EcoFlow-App koppeln.',
+       'Pairing mode active — /v1/json answers 0 instead of errors while no real reading is available ('+Math.max(1,Math.ceil((ec.pairing_left_s||0)/60))+' min left, ends automatically). Pair in the EcoFlow app now.')
+    :'';}
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -2221,6 +2229,10 @@ async function saveEco(){const m=$('ecomsg');m.textContent='…';
   if(r.err==='allow'){m.textContent=t('Allowlist ungültig — nur IPv4-Adressen / CIDR, kommagetrennt','invalid allowlist — IPv4 addresses / CIDR only, comma-separated');return;}
   if(typeof r.enabled==='undefined')throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ecoc=false;load();}
  catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function ecoPair(){const m=$('ecomsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ecotracker',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pairing='+(ecoPairing?'0':'1')})).json();
+  if(typeof r.pairing==='undefined')throw Error();m.textContent='';ecoc=false;load();}
+ catch(e){m.textContent=t('Fehlgeschlagen','failed');}}
 async function saveGwName(){const m=$('gwnmsg');m.textContent='…';
  try{const r=await(await fetch('/api/gwname',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'name='+encodeURIComponent($('gwname').value.trim())})).json();if(!r.ok)throw Error();
   m.textContent=t('gespeichert ✓ — Discovery gesendet','saved ✓ — discovery sent');setTimeout(()=>m.textContent='',3000);load();}
