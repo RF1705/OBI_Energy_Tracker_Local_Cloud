@@ -159,7 +159,40 @@ static bool allowlistCheck(const char *list, IPAddress client, bool validateOnly
   return validateOnly ? true : !anyEntry;
 }
 
+// ---------------------------------------------------------------------------- pairing mode
+// The EcoFlow app probes /v1/json while adopting the meter and rejects it on any error, so a setup whose
+// reader has no usable data yet (fresh install, stale meter) cannot pair at all. Pairing mode is an explicit,
+// user-armed escape hatch: while armed, an error response is replaced by a neutral all-zeros payload -- 0 W
+// tells the STREAM the grid is balanced, the one value it can safely hold against. Real data always wins over
+// the zeros. The mode is RAM-only (never survives a reboot) and DISARMS ITSELF after PAIRING_WINDOW_MS, so a
+// forgotten switch can't leave the STREAM regulating against fiction for good.
+static const uint32_t PAIRING_WINDOW_MS = 15 * 60 * 1000;
+static bool     g_pairing = false;
+static uint32_t g_pairingArmedMs = 0;
+static bool pairingActive() {
+  if (g_pairing && (millis() - g_pairingArmedMs) > PAIRING_WINDOW_MS) {
+    g_pairing = false;
+    Serial.println("[eco] pairing mode expired");
+  }
+  return g_pairing;
+}
+
 // ---------------------------------------------------------------------------- GET /v1/json
+// Pairing-mode stand-in payload: 0 W everywhere, but the ENERGY counters repeat the last published values
+// rather than dropping to 0 -- on a re-pairing the STREAM may already know this meter's totals, and a
+// backwards counter is exactly what the monotonic guard below promises can never happen.
+static void ecoSendZeros() {
+  char buf[224];
+  snprintf(buf, sizeof buf,
+           "{\"power\":0,\"powerAvg\":0,\"agePower\":0,"
+           "\"powerPhase1\":0,\"powerPhase2\":0,\"powerPhase3\":0,"
+           "\"energyCounterIn\":%lu,\"energyCounterInT1\":%lu,\"energyCounterInT2\":0,"
+           "\"energyCounterOut\":%lu}",
+           (unsigned long)g_lastIn, (unsigned long)g_lastIn, (unsigned long)g_lastOut);
+  g_lastPollMs = millis(); g_pollCount++;
+  g_srv->send(200, "application/json", buf);
+}
+
 void eco_handle_v1json() {
   if (!g_ecoOn) { g_srv->send(404, "application/json", "{\"error\":\"ecotracker emulation disabled\"}"); return; }
   if (g_ecoAllow[0] && !allowlistCheck(g_ecoAllow, g_srv->client().remoteIP(), false)) {
@@ -170,6 +203,7 @@ void eco_handle_v1json() {
   }
   Reader *rp = ecoReader();
   if (!rp || !rp->haveData || obi_na(rp->import_)) {
+    if (pairingActive()) { ecoSendZeros(); return; }
     g_srv->send(503, "application/json", "{\"error\":\"no reader data\"}");
     return;
   }
@@ -181,6 +215,7 @@ void eco_handle_v1json() {
   // fiction. A reader reports on an interval (minutes), so being seconds-old is normal -- that is what
   // agePower below is for; only genuinely dead data is refused.
   if (obi_na(pw) || (g_ecoStale && age > g_ecoStale)) {
+    if (pairingActive()) { ecoSendZeros(); return; }
     g_srv->send(503, "application/json", String("{\"error\":\"stale\",\"age_s\":") + age + "}");
     return;
   }
@@ -264,6 +299,11 @@ void eco_handle_cfg() {
     // in /v1/json re-establishes them from the first published sample.
     g_offIn = g_offOut = 0; g_lastIn = g_lastOut = 0; g_haveLast = false;
   }
+  if (g_srv->hasArg("pairing")) {   // deliberately NOT persisted -- see pairingActive()
+    bool p = g_srv->arg("pairing") == "1" || g_srv->arg("pairing") == "true";
+    if (p != g_pairing) Serial.printf("[eco] pairing mode %s\n", p ? "armed (15 min)" : "disarmed");
+    g_pairing = p; g_pairingArmedMs = millis();
+  }
   if (g_srv->hasArg("src")) { int s = g_srv->arg("src").toInt(); if (s >= 0 && s <= 2) g_ecoSrc = (uint8_t)s; }
   if (g_srv->hasArg("stale")) { long s = g_srv->arg("stale").toInt(); if (s >= 0 && s <= 65535) g_ecoStale = (uint16_t)s; }
   if (g_srv->hasArg("phase")) { int s = g_srv->arg("phase").toInt(); if (s >= 0 && s <= 2) g_ecoPhase = (uint8_t)s; }
@@ -305,6 +345,8 @@ String eco_status_json() {
   j += ",\"host\":" + jstr(ecoHostname());
   j += ",\"mac\":" + jstr(ecoMac());
   j += ",\"serial\":" + jstr(g_ecoSerial);
+  j += ",\"pairing\":" + String(pairingActive() ? "true" : "false");
+  j += ",\"pairing_left_s\":" + String(pairingActive() ? (long)((PAIRING_WINDOW_MS - (millis() - g_pairingArmedMs)) / 1000) : 0);
   j += ",\"advertised\":" + String(g_mdnsUp ? "true" : "false");
   j += ",\"port\":80";
   j += ",\"polls\":" + String(g_pollCount);

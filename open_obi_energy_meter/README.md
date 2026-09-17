@@ -312,6 +312,7 @@ zero-export / self-consumption control loop. If your OBI reader already sits on 
 **be** that grid meter for the STREAM — with no other hardware and no cloud on either side:
 
 - Settings → **EcoFlow STREAM (EcoTracker emulation)** → enable, pick the reader (or leave it on *automatic*).
+  If the reader has no reading yet (fresh setup), press **Pairing mode** first — see below.
 - In the EcoFlow app: STREAM → add an **external power meter** → type **"ECOTRACKER IR"**. Phone, gateway and
   STREAM must share one network/broadcast domain during pairing (mDNS). The app does **not** ask for an IP —
   discovery is mDNS-only, which is exactly what the emulation advertises.
@@ -339,6 +340,11 @@ Notes:
   (default 300 s) the gateway answers **503** instead of a stale value, so the STREAM never regulates against
   fiction. For a snappier loop, lower the reader's upload interval and give the reader USB power (its optical
   readout must be active — short-press the reader button so `infrared` is 1).
+- **Pairing mode**: the EcoFlow app rejects the meter on any error during adoption, so pairing fails while the
+  gateway has no usable reading (fresh setup, stale meter). The settings card's **Pairing mode** button arms a
+  15-minute window during which `/v1/json` answers a neutral **all-zeros** payload instead of an error — real
+  readings still win over the zeros. It disarms itself after 15 minutes (or on the button, or on reboot), so a
+  forgotten switch can't leave the STREAM regulating against fiction.
 - The app's meter status dot is an "in active use" flag, not a reachability check — judge success by the
   **"being polled"** status line in the settings card, not by the app.
 - The emulated identity (serial + MAC under everHome's `B4:3A:45` OUI) is generated once and persisted, so the
@@ -737,7 +743,8 @@ ein Messgerät am Netzanschlusspunkt. Sitzt dein OBI-Reader ohnehin auf diesem Z
 Messgerät für den STREAM **sein** — ohne weitere Hardware und ohne Cloud auf beiden Seiten:
 
 - Einstellungen → **EcoFlow STREAM (EcoTracker-Emulation)** → aktivieren, Reader wählen (oder auf *Automatisch*
-  lassen).
+  lassen). Hat der Reader noch keinen Messwert (frische Einrichtung), vorher **Kopplungsmodus** drücken —
+  siehe unten.
 - In der EcoFlow-App: STREAM → **externes Strommessgerät** hinzufügen → Typ **„ECOTRACKER IR"**. Handy, Gateway
   und STREAM müssen beim Koppeln im selben Netz/Broadcast-Bereich sein (mDNS). Die App fragt **keine** IP ab —
   die Erkennung läuft ausschließlich über mDNS, und genau das kündigt die Emulation an.
@@ -767,6 +774,12 @@ Hinweise:
   antwortet das Gateway mit **503** statt mit einem veralteten Wert, damit der STREAM nie gegen Fiktion
   regelt. Für eine flottere Regelung das Upload-Intervall des Readers senken und den Reader per USB versorgen
   (die optische Ablesung muss aktiv sein — Reader-Taste kurz drücken, sodass `infrared` auf 1 steht).
+- **Kopplungsmodus**: die EcoFlow-App lehnt das Messgerät bei jedem Fehler während der Übernahme ab — die
+  Kopplung scheitert also, solange das Gateway keinen brauchbaren Messwert hat (frische Einrichtung, veralteter
+  Zähler). Der Button **Kopplungsmodus** in der Einstellungs-Karte öffnet ein 15-Minuten-Fenster, in dem
+  `/v1/json` statt eines Fehlers einen neutralen **Null-Payload** liefert — echte Messwerte haben weiterhin
+  Vorrang. Der Modus beendet sich nach 15 Minuten selbst (oder per Button, oder beim Neustart), ein vergessener
+  Schalter kann den STREAM also nie dauerhaft gegen Fiktion regeln lassen.
 - Der Messgerät-Status-Punkt in der App ist ein „wird aktiv genutzt"-Indikator, keine Erreichbarkeits-Prüfung —
   Erfolg an der Statuszeile **„wird abgefragt"** in der Einstellungs-Karte ablesen, nicht an der App.
 - Die emulierte Identität (Seriennummer + MAC unter everHomes OUI `B4:3A:45`) wird einmal erzeugt und
