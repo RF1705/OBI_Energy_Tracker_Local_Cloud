@@ -1269,7 +1269,11 @@ static void loraTask(void *) {
     if (g_rx) { g_rx = false; handleRx(); }
     uint32_t now = millis();
     bool ota = gw_ota_active();
-    if (now - lastBeacon >= 1000u) { lastBeacon = now; sendBeacon(); }   // keep 1 Hz beacon (readers pace to it)
+    // Keep the beacon on an absolute 1 Hz cadence. sendBeacon() is synchronous and takes measurable
+    // airtime, so assigning lastBeacon = now would permanently add that TX/runtime jitter to every
+    // following beacon (~1016-1018 ms observed on the stock C3). Advancing the deadline by exactly
+    // 1000 ms prevents that drift while remaining wrap-safe for millis().
+    if ((int32_t)(now - lastBeacon) >= 1000) { lastBeacon += 1000u; sendBeacon(); }
     if (!ota && now - lastScan >= 3000) { lastScan = now; sendScan(); }
     if (!ota)                                         // re-pair safety net for assigned, not-yet-keyed readers
       for (auto &r : readers)
