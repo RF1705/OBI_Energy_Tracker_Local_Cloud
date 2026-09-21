@@ -1,0 +1,90 @@
+name: Gateway test build
+
+# Focused CI for the original OBI ESP32-C3 gateway.
+# Feature branches / PRs get a flashable firmware.bin as a workflow artifact.
+# main keeps using build.yml, which also creates releases.
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - 'open_obi_energy_meter/**'
+      - '.github/workflows/gateway-test.yml'
+  pull_request:
+    paths:
+      - 'open_obi_energy_meter/**'
+      - '.github/workflows/gateway-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-gateway:
+    name: Build OBI Gateway C3
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: gateway-pio-${{ runner.os }}-${{ hashFiles('open_obi_energy_meter/platformio.ini') }}
+          restore-keys: |
+            gateway-pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Build gateway firmware
+        working-directory: open_obi_energy_meter
+        run: pio run -e obi_gateway_c3
+
+      - name: Prepare test artifact
+        working-directory: open_obi_energy_meter
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p dist
+          cp .pio/build/obi_gateway_c3/firmware.bin "dist/obi_gateway_c3-${short_sha}.bin"
+          (
+            cd dist
+            sha256sum "obi_gateway_c3-${short_sha}.bin" > SHA256SUMS.txt
+          )
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "ref=${GITHUB_REF}"
+            echo "commit=${GITHUB_SHA}"
+            echo "environment=obi_gateway_c3"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > dist/build-info.txt
+          ls -lh dist/
+
+      - name: Upload gateway test firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: obi-gateway-c3-${{ github.sha }}
+          path: |
+            open_obi_energy_meter/dist/*.bin
+            open_obi_energy_meter/dist/SHA256SUMS.txt
+            open_obi_energy_meter/dist/build-info.txt
+          if-no-files-found: error
+          retention-days: 14
