@@ -15,7 +15,7 @@ name: Build firmware
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, test/calc-power-zero-build ]
     paths:
       - 'open_obi_energy_meter/**'
       - 'reader_firmware_mod/**'
